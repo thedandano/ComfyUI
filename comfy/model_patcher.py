@@ -57,8 +57,8 @@ def call_memory_required(model, input_shape, cond_shapes={}, model_options=None)
     try:
         inspect.signature(memory_required_fn).bind(input_shape, cond_shapes=cond_shapes, model_options=model_options)
     except TypeError:
-        return memory_required_fn(input_shape, cond_shapes)
-    return memory_required_fn(input_shape, cond_shapes, model_options=model_options)
+        return memory_required_fn(input_shape, cond_shapes=cond_shapes)
+    return memory_required_fn(input_shape, cond_shapes=cond_shapes, model_options=model_options)
 
 class PromptModelTracker:
     def __init__(self):
@@ -704,6 +704,7 @@ class ModelPatcher:
 
         if hasattr(optimized_attention, "container_function") and optimized_attention.container_function is not None:
             optimized_attention_override.container_function = optimized_attention.container_function
+        optimized_attention_override.wrapped_attention_fn = optimized_attention
         self.model_options["transformer_options"]["optimized_attention_override"] = optimized_attention_override
 
     def set_model_input_block_patch(self, patch):

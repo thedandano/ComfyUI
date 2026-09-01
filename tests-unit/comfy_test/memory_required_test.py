@@ -3,6 +3,7 @@ import math
 
 import torch
 
+import comfy.ldm.modules.attention
 import comfy.model_base
 import comfy.model_management
 import comfy.model_patcher
@@ -98,6 +99,44 @@ def test_transformer_options_set_to_none_does_not_crash(monkeypatch):
     assert _estimate(model_options) == EFFICIENT
 
 
+def test_call_memory_required_keeps_keyword_only_cond_shapes_compat():
+    # A legacy BaseModel override with keyword-only cond_shapes must still be callable;
+    # the fallback branch has to pass cond_shapes by keyword, not positionally.
+    class _LegacyKeywordOnlyModel:
+        def memory_required(self, input_shape, *, cond_shapes={}):
+            return "legacy keyword-only estimate"
+
+    result = comfy.model_patcher.call_memory_required(_LegacyKeywordOnlyModel(), INPUT_SHAPE, model_options={})
+    assert result == "legacy keyword-only estimate"
+
+
+def test_known_efficient_amd_override_is_not_forced_conservative(monkeypatch):
+    # ModelAttentionBackend's "pytorch attention" choice installs attention_pytorch itself.
+    # When pytorch_attention_flash_attention() already vouches for that exact function, the
+    # AMD override distrust must not force it back to the conservative estimate.
+    _patch_attention(monkeypatch, pytorch_flash=True, amd=True)
+
+    def optimized_attention_override(_, *args, **kwargs):
+        return comfy.ldm.modules.attention.attention_pytorch(*args, **kwargs)
+    optimized_attention_override.wrapped_attention_fn = comfy.ldm.modules.attention.attention_pytorch
+
+    model_options = {"transformer_options": {"optimized_attention_override": optimized_attention_override}}
+    assert _estimate(model_options) == EFFICIENT
+
+
+def test_unidentified_amd_override_still_uses_conservative_estimate(monkeypatch):
+    # An override that isn't identifiably attention_pytorch keeps the fail-safe conservative
+    # estimate even when pytorch_attention_flash_attention() is otherwise true.
+    _patch_attention(monkeypatch, pytorch_flash=True, amd=True)
+
+    def optimized_attention_override(_, *args, **kwargs):
+        return None
+    optimized_attention_override.wrapped_attention_fn = lambda *a, **k: None
+
+    model_options = {"transformer_options": {"optimized_attention_override": optimized_attention_override}}
+    assert _estimate(model_options) == CONSERVATIVE
+
+
 def test_attention_override_ignored_on_non_amd(monkeypatch):
     # The aotriton-kernel-image gap this distrust protects against is AMD-only. On other
     # platforms an override (e.g. ModelAttentionBackend's "pytorch attention" on CUDA, which
@@ -105,6 +144,14 @@ def test_attention_override_ignored_on_non_amd(monkeypatch):
     _patch_attention(monkeypatch, flash=True, amd=False)
     model_options = {"transformer_options": {"optimized_attention_override": lambda *a, **k: None}}
     assert _estimate(model_options) == EFFICIENT
+
+
+def test_set_model_optimized_attention_tags_wrapped_function():
+    # memory_required()'s known-efficient-override check relies on this tag existing.
+    patcher = _StubPatcher(_StubModel(), model_options={"transformer_options": {}})
+    comfy.model_patcher.ModelPatcher.set_model_optimized_attention(patcher, comfy.ldm.modules.attention.attention_pytorch)
+    override = patcher.model_options["transformer_options"]["optimized_attention_override"]
+    assert override.wrapped_attention_fn is comfy.ldm.modules.attention.attention_pytorch
 
 
 def test_model_patcher_falls_back_for_legacy_memory_required_signature(monkeypatch):
