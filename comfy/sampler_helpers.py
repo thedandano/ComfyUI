@@ -163,9 +163,7 @@ def preprocess_multigpu_conds(conds: dict[str, list[dict[str]]], model: ModelPat
     # potentially handle gligen - since not widely used, ignored for now
 
 def estimate_memory(model, noise_shape, conds, model_options={}):
-    # prepare_sampling()'s own model_options defaults to None, and passes that through
-    # explicitly, which would bypass the {} default above.
-    model_options = model_options or {}
+    model_options = model_options or {}  # prepare_sampling() passes None explicitly
 
     cond_shapes = collections.defaultdict(list)
     cond_shapes_min = {}

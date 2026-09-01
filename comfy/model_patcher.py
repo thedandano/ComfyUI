@@ -48,9 +48,7 @@ def is_model_patcher_output(output):
     return isinstance(output, ModelPatcher) or isinstance(getattr(output, "patcher", None), ModelPatcher)
 
 def call_memory_required(model, input_shape, cond_shapes={}, model_options=None):
-    # Out-of-tree BaseModel subclasses may still override memory_required with the
-    # pre-model_options signature; check before passing a keyword they don't accept
-    # instead of breaking every sampling run for them.
+    # Preserve out-of-tree BaseModel subclasses on the pre-model_options signature.
     if model_options is None:
         model_options = {}
     memory_required_fn = model.memory_required
@@ -704,9 +702,6 @@ class ModelPatcher:
 
         if hasattr(optimized_attention, "container_function") and optimized_attention.container_function is not None:
             optimized_attention_override.container_function = optimized_attention.container_function
-        # Callers that know their override has flash-like memory scaling (e.g. an official,
-        # vetted backend choice) can say so explicitly, so memory_required() doesn't have to
-        # guess by inspecting the callable itself.
         optimized_attention_override.memory_efficient = memory_efficient
         self.model_options["transformer_options"]["optimized_attention_override"] = optimized_attention_override
 

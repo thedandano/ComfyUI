@@ -427,24 +427,17 @@ class BaseModel(torch.nn.Module):
                 if len(shape) > 0:
                     input_shapes += shape
 
-        # An override's actual attention path can't be introspected, but only AMD builds have
-        # the aotriton-kernel-image gap this distrust is protecting against (wrap_attn branches
-        # on key presence, not truthiness, so match that here) - leave other backends untouched.
-        # A caller that knows its override has flash-like memory scaling (e.g.
-        # ModelAttentionBackend's vetted backend choices) says so explicitly via
-        # memory_efficient, rather than this code guessing from the callable itself - and that
-        # signal alone is enough to pick the efficient estimate, independent of auto-detected
-        # backend flags (the AMD case this exists for is precisely when those flags are unset).
+        # A per-model override's memory profile can't be inferred from the global backend
+        # flags (key presence, not truthiness, matching wrap_attn); memory_efficient lets a
+        # caller vouch for its own override instead, on any platform.
         transformer_options = model_options.get("transformer_options") or {}
-        override_is_known_efficient = getattr(transformer_options.get("optimized_attention_override"), "memory_efficient", False)
-        has_untrusted_attention_override = (
-            comfy.model_management.is_amd()
-            and "optimized_attention_override" in transformer_options
-            and not override_is_known_efficient
-        )
+        if "optimized_attention_override" in transformer_options:
+            is_efficient = getattr(transformer_options["optimized_attention_override"], "memory_efficient", False)
+        else:
+            is_efficient = comfy.model_management.xformers_enabled() or comfy.model_management.pytorch_attention_flash_attention() or comfy.model_management.flash_attention_enabled()
 
         #TODO: masked attention falling back off flash in attention_flash() isn't caught here
-        if not has_untrusted_attention_override and (override_is_known_efficient or comfy.model_management.xformers_enabled() or comfy.model_management.pytorch_attention_flash_attention() or comfy.model_management.flash_attention_enabled()):
+        if is_efficient:
             dtype = self.get_dtype_inference()
             #TODO: this needs to be tweaked
             area = sum(map(lambda input_shape: input_shape[0] * math.prod(input_shape[2:]), input_shapes))
