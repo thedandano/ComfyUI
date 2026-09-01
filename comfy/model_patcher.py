@@ -58,6 +58,15 @@ def call_memory_required(model, input_shape, cond_shapes={}, model_options=None)
         return memory_required_fn(input_shape, cond_shapes=cond_shapes)
     return memory_required_fn(input_shape, cond_shapes=cond_shapes, model_options=model_options)
 
+def call_set_model_optimized_attention(patcher, optimized_attention, memory_efficient=False):
+    # Preserve out-of-tree ModelPatcher subclasses on the pre-memory_efficient signature.
+    set_fn = patcher.set_model_optimized_attention
+    try:
+        inspect.signature(set_fn).bind(optimized_attention, memory_efficient=memory_efficient)
+    except TypeError:
+        return set_fn(optimized_attention)
+    return set_fn(optimized_attention, memory_efficient=memory_efficient)
+
 class PromptModelTracker:
     def __init__(self):
         self.models = {}

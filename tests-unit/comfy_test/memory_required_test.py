@@ -155,6 +155,22 @@ def test_model_attention_backend_derives_memory_efficient_from_flash_capability(
     assert override.memory_efficient is False
 
 
+def test_call_set_model_optimized_attention_falls_back_for_legacy_signature():
+    # An out-of-tree ModelPatcher subclass overriding set_model_optimized_attention with the
+    # pre-memory_efficient signature must not TypeError; it just won't get tagged efficient.
+    class _LegacyPatcherStub:
+        def __init__(self):
+            self.model_options = {"transformer_options": {}}
+
+        def set_model_optimized_attention(self, optimized_attention):
+            self.model_options["transformer_options"]["optimized_attention_override"] = optimized_attention
+
+    patcher = _LegacyPatcherStub()
+    comfy.model_patcher.call_set_model_optimized_attention(patcher, lambda *a, **k: None, memory_efficient=True)
+    override = patcher.model_options["transformer_options"]["optimized_attention_override"]
+    assert getattr(override, "memory_efficient", False) is False
+
+
 def test_set_model_optimized_attention_tags_memory_efficient_flag():
     # memory_required()'s known-efficient-override check relies on this tag existing.
     patcher = _StubPatcher(_StubModel(), model_options={"transformer_options": {}})

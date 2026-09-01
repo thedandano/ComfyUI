@@ -5,6 +5,7 @@ import comfy.model_sampling
 import comfy.latent_formats
 import comfy.ldm.modules.attention
 import comfy.model_management
+import comfy.model_patcher
 import nodes
 import torch
 import node_helpers
@@ -400,7 +401,7 @@ class ModelAttentionBackend:
         # attention is only efficient when its flash kernel is actually usable on this build.
         memory_efficient = attention_name != "pytorch" or comfy.model_management.pytorch_attention_flash_attention()
         m = model.clone()
-        m.set_model_optimized_attention(attention_function, memory_efficient=memory_efficient)
+        comfy.model_patcher.call_set_model_optimized_attention(m, attention_function, memory_efficient=memory_efficient)
         return (m, )
 
 
