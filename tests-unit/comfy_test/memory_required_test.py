@@ -1,3 +1,4 @@
+import inspect
 import math
 
 import torch
@@ -145,6 +146,25 @@ def test_estimate_memory_handles_explicit_none_model_options(monkeypatch):
         patcher, INPUT_SHAPE, conds={}, model_options=None
     )
     assert minimum_memory_required == EFFICIENT
+
+
+def test_call_memory_required_bypasses_patcher_dispatch(monkeypatch):
+    # samplers.py / sampler_helpers.py call comfy.model_patcher.call_memory_required directly
+    # against the BaseModel instance, not through the owning ModelPatcher's memory_required.
+    # An out-of-tree ModelPatcher subclass that overrides memory_required(self, input_shape)
+    # for its own (unrelated, pre-load-sizing) purpose must never see this call at all.
+    _patch_attention(monkeypatch, flash=True, amd=True)
+
+    model_options = {"transformer_options": {"optimized_attention_override": lambda *a, **k: None}}
+    result = comfy.model_patcher.call_memory_required(_StubModel(), INPUT_SHAPE, model_options=model_options)
+    assert result == CONSERVATIVE
+
+
+def test_model_patcher_memory_required_keeps_single_arg_signature():
+    # ModelPatcher.memory_required must keep its original (self, input_shape) contract so
+    # out-of-tree ModelPatcher subclasses that override it aren't broken by this change.
+    sig = inspect.signature(comfy.model_patcher.ModelPatcher.memory_required)
+    assert list(sig.parameters) == ["self", "input_shape"]
 
 
 def test_conservative_estimate_is_7_5x_efficient_at_bf16(monkeypatch):

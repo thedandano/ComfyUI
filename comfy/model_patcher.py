@@ -47,6 +47,19 @@ import comfy_aimdo.model_vbar
 def is_model_patcher_output(output):
     return isinstance(output, ModelPatcher) or isinstance(getattr(output, "patcher", None), ModelPatcher)
 
+def call_memory_required(model, input_shape, cond_shapes={}, model_options=None):
+    # Out-of-tree BaseModel subclasses may still override memory_required with the
+    # pre-model_options signature; check before passing a keyword they don't accept
+    # instead of breaking every sampling run for them.
+    if model_options is None:
+        model_options = {}
+    memory_required_fn = model.memory_required
+    try:
+        inspect.signature(memory_required_fn).bind(input_shape, cond_shapes=cond_shapes, model_options=model_options)
+    except TypeError:
+        return memory_required_fn(input_shape, cond_shapes)
+    return memory_required_fn(input_shape, cond_shapes, model_options=model_options)
+
 class PromptModelTracker:
     def __init__(self):
         self.models = {}
@@ -629,19 +642,8 @@ class ModelPatcher:
             else:
                 return True
 
-    def memory_required(self, input_shape, cond_shapes={}, model_options=None):
-        if model_options is None:
-            model_options = self.model_options
-
-        # Out-of-tree BaseModel subclasses may still override memory_required with the
-        # pre-model_options signature; check before passing a keyword they don't accept
-        # instead of breaking every sampling run for them.
-        memory_required_fn = self.model.memory_required
-        try:
-            inspect.signature(memory_required_fn).bind(input_shape, cond_shapes, model_options=model_options)
-        except TypeError:
-            return memory_required_fn(input_shape, cond_shapes)
-        return memory_required_fn(input_shape, cond_shapes, model_options=model_options)
+    def memory_required(self, input_shape):
+        return call_memory_required(self.model, input_shape, model_options=self.model_options)
 
     def disable_model_cfg1_optimization(self):
         self.model_options["disable_cfg1_optimization"] = True
@@ -1844,11 +1846,11 @@ class ModelPatcherDynamic(ModelPatcher):
         finally:
             self.detach(unpatch_all=False)
 
-    def memory_required(self, input_shape, cond_shapes={}, model_options=None):
+    def memory_required(self, input_shape):
         #Pad this significantly. We are trying to get away from precise estimates. This
         #estimate is only used when using the ModelPatcherDynamic after ModelPatcher. If you
         #use all ModelPatcherDynamic this is ignored and its all done dynamically.
-        return super().memory_required(input_shape, cond_shapes, model_options) * 1.3 + (1024 ** 3)
+        return super().memory_required(input_shape=input_shape) * 1.3 + (1024 ** 3)
 
     def restore_loaded_backups(self):
         restored = self.model.model_loaded_weight_memory
