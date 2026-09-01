@@ -97,6 +97,17 @@ def test_transformer_options_set_to_none_does_not_crash(monkeypatch):
     assert _estimate(model_options) == EFFICIENT
 
 
+def test_call_memory_required_falls_back_for_pre_cond_shapes_signature():
+    # A pre-#15586 BaseModel override with neither cond_shapes nor model_options must still
+    # be callable - the fallback has to degrade past cond_shapes too, not just model_options.
+    class _DoublyLegacyModel:
+        def memory_required(self, input_shape):
+            return "doubly legacy estimate"
+
+    result = comfy.model_patcher.call_memory_required(_DoublyLegacyModel(), INPUT_SHAPE, model_options={})
+    assert result == "doubly legacy estimate"
+
+
 def test_call_memory_required_keeps_keyword_only_cond_shapes_compat():
     # A legacy BaseModel override with keyword-only cond_shapes must still be callable;
     # the fallback branch has to pass cond_shapes by keyword, not positionally.
