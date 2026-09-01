@@ -178,8 +178,8 @@ def estimate_memory(model, noise_shape, conds, model_options={}):
                 elif math.prod(v) > math.prod(cond_shapes_min[k][0]):
                     cond_shapes_min[k] = [v]
 
-    memory_required = model.model.memory_required([noise_shape[0] * 2] + list(noise_shape[1:]), cond_shapes=cond_shapes, model_options=model_options)
-    minimum_memory_required = model.model.memory_required([noise_shape[0]] + list(noise_shape[1:]), cond_shapes=cond_shapes_min, model_options=model_options)
+    memory_required = model.memory_required([noise_shape[0] * 2] + list(noise_shape[1:]), cond_shapes=cond_shapes, model_options=model_options)
+    minimum_memory_required = model.memory_required([noise_shape[0]] + list(noise_shape[1:]), cond_shapes=cond_shapes_min, model_options=model_options)
     return memory_required, minimum_memory_required
 
 def prepare_sampling(model: ModelPatcher, noise_shape, conds, model_options=None, force_full_load=False, force_offload=False):

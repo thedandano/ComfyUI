@@ -427,8 +427,10 @@ class BaseModel(torch.nn.Module):
                 if len(shape) > 0:
                     input_shapes += shape
 
-        # wrap_attn (attention.py) branches on key presence, not truthiness, so match that here.
-        has_attention_override = "optimized_attention_override" in (model_options.get("transformer_options") or {})
+        # An override's actual attention path can't be introspected, but only AMD builds have
+        # the aotriton-kernel-image gap this distrust is protecting against (wrap_attn branches
+        # on key presence, not truthiness, so match that here) - leave other backends untouched.
+        has_attention_override = comfy.model_management.is_amd() and "optimized_attention_override" in (model_options.get("transformer_options") or {})
 
         #TODO: masked attention falling back off flash in attention_flash() isn't caught here
         if not has_attention_override and (comfy.model_management.xformers_enabled() or comfy.model_management.pytorch_attention_flash_attention() or comfy.model_management.flash_attention_enabled()):
