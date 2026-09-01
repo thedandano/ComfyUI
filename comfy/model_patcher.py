@@ -630,7 +630,7 @@ class ModelPatcher:
                 return True
 
     def memory_required(self, input_shape):
-        return self.model.memory_required(input_shape=input_shape)
+        return self.model.memory_required(input_shape=input_shape, model_options=self.model_options)
 
     def disable_model_cfg1_optimization(self):
         self.model_options["disable_cfg1_optimization"] = True

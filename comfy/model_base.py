@@ -413,7 +413,7 @@ class BaseModel(torch.nn.Module):
     def scale_latent_inpaint(self, sigma, noise, latent_image, **kwargs):
         return self.model_sampling.noise_scaling(sigma.reshape([sigma.shape[0]] + [1] * (len(noise.shape) - 1)), noise, latent_image)
 
-    def memory_required(self, input_shape, cond_shapes={}):
+    def memory_required(self, input_shape, cond_shapes={}, model_options={}):
         input_shapes = [input_shape]
         for c in self.memory_usage_factor_conds:
             shape = cond_shapes.get(c, None)
@@ -427,7 +427,11 @@ class BaseModel(torch.nn.Module):
                 if len(shape) > 0:
                     input_shapes += shape
 
-        if comfy.model_management.xformers_enabled() or comfy.model_management.pytorch_attention_flash_attention() or comfy.model_management.flash_attention_enabled():
+        # wrap_attn (attention.py) branches on key presence, not truthiness, so match that here.
+        has_attention_override = "optimized_attention_override" in (model_options.get("transformer_options") or {})
+
+        #TODO: masked attention falling back off flash in attention_flash() isn't caught here
+        if not has_attention_override and (comfy.model_management.xformers_enabled() or comfy.model_management.pytorch_attention_flash_attention() or comfy.model_management.flash_attention_enabled()):
             dtype = self.get_dtype_inference()
             #TODO: this needs to be tweaked
             area = sum(map(lambda input_shape: input_shape[0] * math.prod(input_shape[2:]), input_shapes))
@@ -2464,8 +2468,8 @@ class SenseNovaU15(BaseModel):
                 out["prefix_values"] = prefix_shape
         return out
 
-    def memory_required(self, input_shape, cond_shapes={}):
-        memory = super().memory_required(input_shape, cond_shapes)
+    def memory_required(self, input_shape, cond_shapes={}, model_options={}):
+        memory = super().memory_required(input_shape, cond_shapes, model_options=model_options)
         dtype_size = comfy.model_management.dtype_size(self.get_dtype_inference())
         return memory + sum(
             math.prod(shape) * dtype_size
