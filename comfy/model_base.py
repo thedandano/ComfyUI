@@ -413,7 +413,7 @@ class BaseModel(torch.nn.Module):
     def scale_latent_inpaint(self, sigma, noise, latent_image, **kwargs):
         return self.model_sampling.noise_scaling(sigma.reshape([sigma.shape[0]] + [1] * (len(noise.shape) - 1)), noise, latent_image)
 
-    def memory_required(self, input_shape, cond_shapes={}, model_options={}):
+    def memory_required(self, input_shape, cond_shapes={}, attention_override_efficient=None):
         input_shapes = [input_shape]
         for c in self.memory_usage_factor_conds:
             shape = cond_shapes.get(c, None)
@@ -427,14 +427,12 @@ class BaseModel(torch.nn.Module):
                 if len(shape) > 0:
                     input_shapes += shape
 
-        # A per-model override's memory profile can't be inferred from the global backend
-        # flags (key presence, not truthiness, matching wrap_attn); memory_efficient lets a
-        # caller vouch for its own override instead, on any platform.
-        transformer_options = model_options.get("transformer_options") or {}
-        if "optimized_attention_override" in transformer_options:
-            is_efficient = getattr(transformer_options["optimized_attention_override"], "memory_efficient", False)
-        else:
+        # None means no per-model attention override; its memory profile can't be inferred
+        # from the global backend flags, so a present override's own vouched-for value wins.
+        if attention_override_efficient is None:
             is_efficient = comfy.model_management.xformers_enabled() or comfy.model_management.pytorch_attention_flash_attention() or comfy.model_management.flash_attention_enabled()
+        else:
+            is_efficient = attention_override_efficient
 
         #TODO: masked attention falling back off flash in attention_flash() isn't caught here
         if is_efficient:
@@ -2474,8 +2472,8 @@ class SenseNovaU15(BaseModel):
                 out["prefix_values"] = prefix_shape
         return out
 
-    def memory_required(self, input_shape, cond_shapes={}, model_options={}):
-        memory = super().memory_required(input_shape, cond_shapes, model_options=model_options)
+    def memory_required(self, input_shape, cond_shapes={}, attention_override_efficient=None):
+        memory = super().memory_required(input_shape, cond_shapes, attention_override_efficient=attention_override_efficient)
         dtype_size = comfy.model_management.dtype_size(self.get_dtype_inference())
         return memory + sum(
             math.prod(shape) * dtype_size

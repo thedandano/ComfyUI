@@ -21,7 +21,7 @@ class _StubModel:
 
 
 class _LegacyStubModel:
-    """Mimics an out-of-tree BaseModel subclass that hasn't been updated for model_options."""
+    """Mimics an out-of-tree BaseModel subclass that hasn't been updated for attention_override_efficient."""
     def memory_required(self, input_shape, cond_shapes={}):
         return "legacy estimate"
 
@@ -48,8 +48,8 @@ def _patch_attention(monkeypatch, xformers=False, pytorch_flash=False, flash=Fal
     monkeypatch.setattr(comfy.model_management, "flash_attention_enabled", lambda: flash)
 
 
-def _estimate(model_options={}):
-    return comfy.model_base.BaseModel.memory_required(_StubModel(), INPUT_SHAPE, model_options=model_options)
+def _estimate(attention_override_efficient=None):
+    return comfy.model_base.BaseModel.memory_required(_StubModel(), INPUT_SHAPE, attention_override_efficient=attention_override_efficient)
 
 
 def test_no_efficient_attention_uses_conservative_estimate(monkeypatch):
@@ -75,26 +75,29 @@ def test_flash_attention_flag_uses_efficient_estimate(monkeypatch):
     assert _estimate() == EFFICIENT
 
 
-def test_attention_override_uses_conservative_estimate(monkeypatch):
-    # A ModelAttentionBackend override replaces the attention path outright,
-    # so the estimate can't trust the global flash/xformers flags anymore.
+def test_attention_override_efficient_false_uses_conservative_estimate(monkeypatch):
+    # A per-model attention override that isn't vouched-for efficient can't trust the
+    # global flash/xformers flags - its own memory profile might be entirely different.
     _patch_attention(monkeypatch, flash=True)
-    model_options = {"transformer_options": {"optimized_attention_override": lambda *a, **k: None}}
-    assert _estimate(model_options) == CONSERVATIVE
+    assert _estimate(attention_override_efficient=False) == CONSERVATIVE
 
 
-def test_attention_override_set_to_none_still_uses_conservative_estimate(monkeypatch):
-    # wrap_attn (attention.py) branches on key presence, not truthiness.
-    _patch_attention(monkeypatch, flash=True)
-    model_options = {"transformer_options": {"optimized_attention_override": None}}
-    assert _estimate(model_options) == CONSERVATIVE
+def test_attention_override_efficient_true_uses_efficient_estimate(monkeypatch):
+    # A caller (e.g. ModelAttentionBackend) that vouches for its override is trusted on
+    # any platform, even with no global backend flag set.
+    _patch_attention(monkeypatch)
+    assert _estimate(attention_override_efficient=True) == EFFICIENT
 
 
-def test_transformer_options_set_to_none_does_not_crash(monkeypatch):
-    # transformer_options itself being None (not absent) shouldn't crash the .get() fallback.
-    _patch_attention(monkeypatch, flash=True)
-    model_options = {"transformer_options": None}
-    assert _estimate(model_options) == EFFICIENT
+def test_call_memory_required_calls_by_keyword_for_keyword_only_input_shape():
+    # ModelPatcher.memory_required's own call into BaseModel used keyword input_shape;
+    # every fallback tier must accept that too, not just the ones for cond_shapes/model_options.
+    class _KeywordOnlyInputShapeModel:
+        def memory_required(self, *, input_shape):
+            return "keyword-only input_shape estimate"
+
+    result = comfy.model_patcher.call_memory_required(_KeywordOnlyInputShapeModel(), INPUT_SHAPE, model_options={})
+    assert result == "keyword-only input_shape estimate"
 
 
 def test_call_memory_required_falls_back_for_pre_cond_shapes_signature():
@@ -119,31 +122,59 @@ def test_call_memory_required_keeps_keyword_only_cond_shapes_compat():
     assert result == "legacy keyword-only estimate"
 
 
-def test_memory_efficient_override_uses_efficient_estimate(monkeypatch):
-    # A caller (e.g. ModelAttentionBackend) that explicitly marks its override as
-    # memory_efficient is trusted on any platform, even with no global backend flag set.
-    _patch_attention(monkeypatch)
+class _RecordingModel:
+    """Captures the attention_override_efficient value call_memory_required derives."""
+    received = "not called"
+
+    def memory_required(self, input_shape, cond_shapes={}, attention_override_efficient=None):
+        self.received = attention_override_efficient
+        return "recorded"
+
+
+def test_call_memory_required_derives_none_with_no_transformer_options():
+    model = _RecordingModel()
+    comfy.model_patcher.call_memory_required(model, INPUT_SHAPE, model_options={})
+    assert model.received is None
+
+
+def test_call_memory_required_derives_none_when_transformer_options_is_none():
+    model = _RecordingModel()
+    comfy.model_patcher.call_memory_required(model, INPUT_SHAPE, model_options={"transformer_options": None})
+    assert model.received is None
+
+
+def test_call_memory_required_derives_none_with_no_override_key():
+    model = _RecordingModel()
+    comfy.model_patcher.call_memory_required(model, INPUT_SHAPE, model_options={"transformer_options": {}})
+    assert model.received is None
+
+
+def test_call_memory_required_derives_true_from_marked_efficient_override():
+    model = _RecordingModel()
 
     def optimized_attention_override(_, *args, **kwargs):
         return None
     optimized_attention_override.memory_efficient = True
 
     model_options = {"transformer_options": {"optimized_attention_override": optimized_attention_override}}
-    assert _estimate(model_options) == EFFICIENT
+    comfy.model_patcher.call_memory_required(model, INPUT_SHAPE, model_options=model_options)
+    assert model.received is True
 
 
-def test_unmarked_override_uses_conservative_estimate_on_any_platform(monkeypatch):
-    # An override that doesn't declare itself memory_efficient must force the conservative
-    # estimate on every platform, not just AMD - a custom node's quadratic override on CUDA
-    # must not be silently trusted just because a global backend flag happens to be on.
-    _patch_attention(monkeypatch, pytorch_flash=True)
+def test_call_memory_required_derives_false_from_unmarked_override():
+    # An override present without a memory_efficient tag is untrusted, not "unknown".
+    model = _RecordingModel()
+    model_options = {"transformer_options": {"optimized_attention_override": lambda *a, **k: None}}
+    comfy.model_patcher.call_memory_required(model, INPUT_SHAPE, model_options=model_options)
+    assert model.received is False
 
-    def optimized_attention_override(_, *args, **kwargs):
-        return None
-    optimized_attention_override.memory_efficient = False
 
-    model_options = {"transformer_options": {"optimized_attention_override": optimized_attention_override}}
-    assert _estimate(model_options) == CONSERVATIVE
+def test_call_memory_required_derives_false_when_override_value_is_none():
+    # wrap_attn (attention.py) branches on key presence, not truthiness.
+    model = _RecordingModel()
+    model_options = {"transformer_options": {"optimized_attention_override": None}}
+    comfy.model_patcher.call_memory_required(model, INPUT_SHAPE, model_options=model_options)
+    assert model.received is False
 
 
 def test_model_attention_backend_derives_memory_efficient_from_flash_capability(monkeypatch):
@@ -199,15 +230,15 @@ def test_set_model_optimized_attention_defaults_to_not_memory_efficient():
 
 
 def test_model_patcher_falls_back_for_legacy_memory_required_signature(monkeypatch):
-    # An out-of-tree BaseModel subclass that hasn't been updated for model_options must not
-    # crash - it should keep getting its own (pre-fix) estimate, not a TypeError.
+    # An out-of-tree BaseModel subclass that hasn't been updated for attention_override_efficient
+    # must not crash - it should keep getting its own (pre-fix) estimate, not a TypeError.
     _patch_attention(monkeypatch, flash=True)
     patcher = _StubPatcher(_LegacyStubModel(), model_options={"transformer_options": {"optimized_attention_override": lambda *a, **k: None}})
     assert patcher.memory_required(INPUT_SHAPE) == "legacy estimate"
 
 
-def test_model_patcher_passes_model_options_for_updated_models(monkeypatch):
-    # A model whose memory_required accepts model_options gets the real override-aware estimate.
+def test_model_patcher_gives_updated_models_the_override_aware_estimate(monkeypatch):
+    # A model whose memory_required accepts attention_override_efficient gets the real estimate.
     _patch_attention(monkeypatch, flash=True)
     patcher = _StubPatcher(_StubModel(), model_options={"transformer_options": {"optimized_attention_override": lambda *a, **k: None}})
     assert patcher.memory_required(INPUT_SHAPE) == CONSERVATIVE

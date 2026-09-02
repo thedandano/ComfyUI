@@ -48,23 +48,30 @@ def is_model_patcher_output(output):
     return isinstance(output, ModelPatcher) or isinstance(getattr(output, "patcher", None), ModelPatcher)
 
 def call_memory_required(model, input_shape, cond_shapes={}, model_options=None):
-    # Preserve out-of-tree BaseModel subclasses on the pre-model_options and pre-cond_shapes
-    # signatures. Bind-check each tier before calling, so a real TypeError raised from inside
-    # memory_required itself propagates instead of being swallowed and retried.
-    if model_options is None:
-        model_options = {}
+    # Preserve out-of-tree BaseModel subclasses on the pre-attention_override_efficient and
+    # pre-cond_shapes signatures, and on a keyword-only input_shape. Bind-check each tier
+    # before calling, so a real TypeError raised from inside memory_required itself
+    # propagates instead of being swallowed and retried.
+    model_options = model_options or {}
+    transformer_options = model_options.get("transformer_options") or {}
+    if "optimized_attention_override" in transformer_options:
+        # memory_efficient is stamped on the override by set_model_optimized_attention.
+        attention_override_efficient = getattr(transformer_options["optimized_attention_override"], "memory_efficient", False)
+    else:
+        attention_override_efficient = None
+
     memory_required_fn = model.memory_required
     sig = inspect.signature(memory_required_fn)
-    kwargs = {"cond_shapes": cond_shapes, "model_options": model_options}
+    kwargs = {"input_shape": input_shape, "cond_shapes": cond_shapes, "attention_override_efficient": attention_override_efficient}
     try:
-        sig.bind(input_shape, **kwargs)
+        sig.bind(**kwargs)
     except TypeError:
-        del kwargs["model_options"]
+        del kwargs["attention_override_efficient"]
         try:
-            sig.bind(input_shape, **kwargs)
+            sig.bind(**kwargs)
         except TypeError:
-            kwargs.clear()
-    return memory_required_fn(input_shape, **kwargs)
+            kwargs = {"input_shape": input_shape}
+    return memory_required_fn(**kwargs)
 
 def call_set_model_optimized_attention(patcher, optimized_attention, memory_efficient=False):
     # Preserve out-of-tree ModelPatcher subclasses on the pre-memory_efficient signature.
