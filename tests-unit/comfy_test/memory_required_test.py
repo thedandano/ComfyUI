@@ -100,6 +100,17 @@ def test_call_memory_required_calls_by_keyword_for_keyword_only_input_shape():
     assert result == "keyword-only input_shape estimate"
 
 
+def test_call_memory_required_calls_positionally_for_renamed_first_param():
+    # The original sampler call sites passed input_shape positionally, which works
+    # regardless of what an out-of-tree override names (or how it marks) that parameter.
+    class _RenamedFirstParamModel:
+        def memory_required(self, shape, cond_shapes={}):
+            return "renamed-param estimate"
+
+    result = comfy.model_patcher.call_memory_required(_RenamedFirstParamModel(), INPUT_SHAPE, model_options={})
+    assert result == "renamed-param estimate"
+
+
 def test_call_memory_required_falls_back_for_pre_cond_shapes_signature():
     # A pre-#15586 BaseModel override with neither cond_shapes nor model_options must still
     # be callable - the fallback has to degrade past cond_shapes too, not just model_options.
